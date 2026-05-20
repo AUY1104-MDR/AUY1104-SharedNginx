@@ -1,0 +1,82 @@
+name: CI/CD Nginx 30080 (K8s Manifests)
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de la imagen (solo workflow_dispatch). Ejemplo: v0.0.1'
+        required: true
+        default: 'manual-latest'
+        type: string
+
+env:
+  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1 – Checkout
+        uses: actions/checkout@v4
+
+      - name: 2 – Login Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 3 – Build con Multi-Tag
+        run: |
+          IMAGE_NAME="nginx-custom"
+          FULL_IMAGE="${{ secrets.DOCKER_USERNAME }}/${IMAGE_NAME}"
+          docker build -t "${FULL_IMAGE}:${IMAGE_TAG}" -t "${FULL_IMAGE}:latest" .
+          docker push --all-tags "${FULL_IMAGE}"
+
+  deploy:
+    name: Despliegue Controlado en EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout para obtener manifiestos
+        uses: actions/checkout@v4
+
+      - name: Transferencia Limpia de Archivos (SCP)
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ vars.K3S_SERVER_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+          source: "k8s/*.yml"
+          target: "~/deploy-nginx/"
+          strip_components: 1
+          overwrite: true
+
+      - name: Ejecución y Verificación en K3s
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ vars.K3S_SERVER_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.EA2_SSH_PRIVATE_KEY }}
+          envs: IMAGE_TAG
+          script: |
+            set -e
+
+            FULL_IMAGE="${{ secrets.DOCKER_USERNAME }}/nginx-custom:${IMAGE_TAG}"
+
+            sed -i "s|IMAGE_PLACEHOLDER|$FULL_IMAGE|g" ~/deploy-nginx/deployment.yml
+
+            sudo kubectl apply -f ~/deploy-nginx/deployment.yml
+            sudo kubectl apply -f ~/deploy-nginx/service.yml
+
+            echo "Esperando a que el pod esté en estado Ready..."
+            sudo kubectl rollout status deployment/nginx-30080 --timeout=120s
+
+            echo "--- pods ---"
+            sudo kubectl get pods -l app=nginx-30080 -o wide
+            echo "--- service ---"
+            sudo kubectl get svc nginx-svc-30080
+            echo "--- curl interno ---"
+            curl -fsS --max-time 10 http://localhost:30080 | head -c 200 || echo "curl falló (no bloquea pipeline)"
