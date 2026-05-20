@@ -17,7 +17,7 @@ Cubre el requisito de la sección 5 de la pauta: servicio nginx expuesto vía No
 ## Flujo CI/CD
 
 ```
-push tag v* (o workflow_dispatch)
+push tag v*
    ↓
 Build Docker (nginx-custom:<tag> + :latest)
    ↓
@@ -28,9 +28,7 @@ SCP de manifiestos al servidor k3s
 sed → kubectl apply → rollout status → curl :30080
 ```
 
-Disparadores:
-- `push` de un tag `v*` (ej. `v0.0.1`).
-- `workflow_dispatch` manual con input `tag`.
+Disparador único: `push` de un tag `v*` (ej. `v0.0.1`). El versionamiento es obligatorio y no se permite ejecución manual.
 
 Secrets/Variables necesarios:
 - `secrets.DOCKER_USERNAME` / `secrets.DOCKER_PASSWORD` (organización)
